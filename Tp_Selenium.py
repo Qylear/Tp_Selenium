@@ -14,9 +14,32 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 def get_user_input():
+    """Récupère les paramètres de recherche de l'utilisateur"""
     speciality = input("Spécialité (ex: généraliste): ")
     location = input("Ville ou code postal: ")
-    return speciality, location
+    
+    # Filtre par secteur
+    print("\nFiltre par secteur:")
+    print("1. Tous les secteurs")
+    print("2. Secteur 1 uniquement")
+    print("3. Secteur 2 uniquement")
+    print("4. Conventionné uniquement")
+    
+    sector_choice = input("Choisissez une option (1-4) [défaut: 1]: ").strip()
+    if not sector_choice:
+        sector_choice = "1"
+    
+    sector_filter = {
+        "1": "tous",
+        "2": "secteur 1",
+        "3": "secteur 2", 
+        "4": "conventionné"
+    }.get(sector_choice, "tous")
+    
+    visio_filter = input("\nFiltrer uniquement les médecins avec visio disponible? (o/n) [défaut: n]: ").strip().lower()
+    visio_only = visio_filter in ['o', 'oui', 'y', 'yes']
+    
+    return speciality, location, sector_filter, visio_only
 
 def setup_driver():
     options = webdriver.ChromeOptions()
@@ -33,7 +56,6 @@ def setup_driver():
 
 def handle_cookies(wait):
     try:
-        # Essayer plusieurs sélecteurs pour les cookies
         cookie_selectors = [
             "#didomi-notice-disagree-button",
             "button[aria-label='Refuser']",
@@ -100,7 +122,6 @@ def search_doctors(driver, wait, speciality, location):
             speciality_input.send_keys(speciality)
             time.sleep(1)
         
-        # Bouton de recherche
         submit_selectors = [
             "button.searchbar-submit-button",
             "button[type='submit']",
@@ -124,7 +145,6 @@ def search_doctors(driver, wait, speciality, location):
 
 def extract_doctor_info(card):
     try:
-        # Extraction du nom du médecin
         name = ""
         name_selectors = [
             "h2.dl-text.dl-text-body.dl-text-bold.dl-text-s.dl-text-primary-110",
@@ -142,12 +162,10 @@ def extract_doctor_info(card):
             except:
                 continue
         
-        # Extraction de l'adresse et autres informations
         address = ""
         sector = ""
         availability = ""
         
-        # Chercher tous les paragraphes avec différents sélecteurs
         paragraph_selectors = [
             "p.XZWvFVZmM9FHf461kjNO.G5dSlmEET4Zf5bQ5PR69",
             "p[data-design-system-component='Paragraph']",
@@ -164,21 +182,19 @@ def extract_doctor_info(card):
             except:
                 continue
         
-        # Analyser le contenu des paragraphes
         for p in paragraphs:
             try:
                 text = p.text.strip()
                 if not text:
                     continue
                     
-                # Identifier le type d'information basé sur le contenu
                 if "Secteur" in text or "€" in text or "Conventionné" in text:
                     sector = text
                 elif "Disponibilité" in text or "disponible" in text or "prochaine" in text:
                     availability = text
                 elif any(word in text.lower() for word in ["rue", "avenue", "boulevard", "place", "chemin", "allée"]):
                     address = text
-                elif text.replace(" ", "").isdigit() and len(text) == 5:  # Code postal
+                elif text.replace(" ", "").isdigit() and len(text) == 5:  
                     if not address:
                         address = text
                     else:
@@ -186,7 +202,6 @@ def extract_doctor_info(card):
             except:
                 continue
         
-        # Si pas d'adresse trouvée, chercher les spans avec des coordonnées
         if not address:
             try:
                 location_elements = card.find_elements(By.CSS_SELECTOR, "span[class*='location'], span[class*='address'], .dl-text-neutral-090")
@@ -198,7 +213,6 @@ def extract_doctor_info(card):
             except:
                 pass
         
-        # Extraction de la spécialité depuis le titre/paragraphe de spécialité
         specialty = ""
         try:
             specialty_elements = card.find_elements(By.CSS_SELECTOR, "p[style*='oxygen-color-component-text-bodyText-neutral-weak']")
@@ -210,17 +224,15 @@ def extract_doctor_info(card):
         except:
             pass
         
-        # Vérification de la disponibilité de la visio
         visio_status = "visio non dispo"
         try:
-            # Chercher les icônes ou textes indicateurs de visio
             visio_indicators = [
                 "svg[data-icon-name='video/video']",
                 "svg[data-icon-name='video']", 
                 ".video-icon",
                 "[aria-label*='vidéo']",
                 "[aria-label*='Vidéo']",
-                "svg[viewBox='0 0 16 16'][fill='currentColor']",  # Icône vidéo basée sur votre HTML
+                "svg[viewBox='0 0 16 16'][fill='currentColor']",
                 "*[class*='video']",
                 "*[title*='vidéo']",
                 "*[title*='Vidéo']"
@@ -230,23 +242,19 @@ def extract_doctor_info(card):
                 try:
                     visio_elements = card.find_elements(By.CSS_SELECTOR, selector)
                     for elem in visio_elements:
-                        # Vérifier si l'élément est visible et contient des indices de visio
                         if elem.is_displayed():
-                            # Pour les SVG, vérifier les attributs
                             if elem.tag_name.lower() == 'svg':
                                 viewbox = elem.get_attribute('viewBox')
-                                if viewbox == '0 0 16 16':  # Viewbox spécifique à l'icône vidéo
+                                if viewbox == '0 0 16 16':  
                                     visio_status = "visio dispo"
                                     break
                             
-                            # Vérifier les attributs aria-label ou title
                             aria_label = elem.get_attribute('aria-label') or ""
                             title = elem.get_attribute('title') or ""
                             if any(word in (aria_label + title).lower() for word in ['vidéo', 'video', 'visio']):
                                 visio_status = "visio dispo"
                                 break
                             
-                            # Vérifier les classes contenant video
                             class_attr = elem.get_attribute('class') or ""
                             if 'video' in class_attr.lower():
                                 visio_status = "visio dispo"
@@ -256,8 +264,6 @@ def extract_doctor_info(card):
                         break
                 except:
                     continue
-            
-            # Vérification alternative : chercher dans le texte
             if visio_status == "visio non dispo":
                 all_text = card.text.lower()
                 if any(word in all_text for word in ['visio', 'vidéo', 'téléconsultation', 'video']):
@@ -280,6 +286,33 @@ def extract_doctor_info(card):
         logger.error(f"Erreur d'extraction: {e}")
         return None
 
+def filter_doctors(doctors, sector_filter, visio_only):
+    """Filtre les médecins selon les critères choisis"""
+    filtered_doctors = []
+    
+    for doctor in doctors:
+        if not doctor or not doctor.get('name'):
+            continue
+            
+        sector_match = True
+        if sector_filter != "tous":
+            doctor_sector = (doctor.get('sector') or "").lower()
+            
+            if sector_filter == "secteur 1":
+                sector_match = "secteur 1" in doctor_sector or "secteur1" in doctor_sector
+            elif sector_filter == "secteur 2":
+                sector_match = "secteur 2" in doctor_sector or "secteur2" in doctor_sector
+            elif sector_filter == "conventionné":
+                sector_match = "conventionné" in doctor_sector or "convention" in doctor_sector
+        
+        visio_match = True
+        if visio_only:
+            visio_match = doctor.get('visio') == "visio dispo"
+        if sector_match and visio_match:
+            filtered_doctors.append(doctor)
+            
+    return filtered_doctors
+
 def save_to_csv(doctors):
     filename = "doctors.csv"
     with open(filename, "w", newline="", encoding="utf-8") as f:
@@ -288,17 +321,15 @@ def save_to_csv(doctors):
         valid_doctors = [doc for doc in doctors if doc and doc.get('name')]
         for doc in valid_doctors:
             writer.writerow(doc)
-    
     logger.info(f"{len(valid_doctors)} médecins sauvegardés dans {filename}")
 
 def main():
     try:
-        speciality, location = get_user_input()
+        speciality, location, sector_filter, visio_only = get_user_input()
         driver, wait = setup_driver()
         
         search_doctors(driver, wait, speciality, location)
         
-        # Attendre le chargement des résultats avec plusieurs sélecteurs
         cards = []
         result_selectors = [
             ".dl-search-result",
@@ -322,7 +353,7 @@ def main():
         logger.info(f"{len(cards)} résultats trouvés.")
         
         doctors = []
-        for i, card in enumerate(cards[:20]):  # Limiter à 20 premiers résultats
+        for i, card in enumerate(cards[:20]):  
             try:
                 info = extract_doctor_info(card)
                 if info and info.get('name'):
@@ -335,8 +366,32 @@ def main():
                 continue
         
         if doctors:
-            save_to_csv(doctors)
-        else:
+            filtered_doctors = filter_doctors(doctors, sector_filter, visio_only)
+            
+            logger.info(f"Filtres appliqués:")
+            logger.info(f"- Secteur: {sector_filter}")
+            logger.info(f"- Visio uniquement: {'Oui' if visio_only else 'Non'}")
+            logger.info(f"Résultats: {len(filtered_doctors)}/{len(doctors)} médecins correspondent aux critères")
+            
+            save_to_csv(filtered_doctors)
+            save_to_csv(filtered_doctors, sector_filter, visio_only)
+                
+            print(f"\n=== RÉSUMÉ DES RÉSULTATS FILTRÉS ===")
+            for i, doctor in enumerate(filtered_doctors, 1):
+                    print(f"{i}. {doctor['name']}")
+                    if doctor['specialty']:
+                        print(f"   Spécialité: {doctor['specialty']}")
+                    if doctor['sector']:
+                        print(f"   Secteur: {doctor['sector']}")
+                    print(f"   Visio: {doctor['visio']}")
+                    if doctor['address']:
+                        print(f"   Adresse: {doctor['address']}")
+                    print()
+            else:
+                logger.warning("Aucun médecin ne correspond aux critères de filtrage spécifiés.")
+                print("\n💡 Suggestions:")
+                print("- Essayez de modifier les filtres (secteur ou visio)")
+                print("- Vérifiez si la spécialité ou la localisation sont correctes")
             logger.warning("Aucune donnée de médecin extraite.")
             
     except ModuleNotFoundError as e:
