@@ -2,226 +2,281 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
+from webdriver_manager.chrome import ChromeDriverManager
 import time
 import csv
 import logging
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def get_user_input():
-    speciality = input("Entrez la spécialité recherchée (ex: dermatologue): ")
-    location = input("Entrez le code postal ou la ville: ")
-    
-    # Ask about filters
-    want_filters = input("Voulez-vous des filtres en plus ? (o/n) : ").lower()
-    filters = {}
-    
-    if want_filters in ['o', 'oui']:
-        # Ask about video consultation
-        want_video = input("Voulez-vous uniquement des consultations en visio ? (o/n) : ").lower()
-        filters['video'] = want_video in ['o', 'oui']
-        
-        # Ask about insurance sector
-        want_insurance = input("Voulez-vous filtrer par type d'assurance ? (o/n) : ").lower()
-        if want_insurance in ['o', 'oui']:
-            print("\nTypes d'assurance disponibles:")
-            print("1 - Secteur 1")
-            print("2 - Secteur 2")
-            print("0 - Non conventionné")
-            sector = input("\nEntrez le numéro correspondant au secteur souhaité (0, 1 ou 2) : ")
-            while sector not in ['0', '1', '2']:
-                print("Erreur: Veuillez entrer 0, 1 ou 2")
-                sector = input("Entrez le numéro correspondant au secteur souhaité (0, 1 ou 2) : ")
-            filters['sector'] = sector
-    
-    return speciality, location, filters
+    speciality = input("Spécialité (ex: généraliste): ")
+    location = input("Ville ou code postal: ")
+    return speciality, location
 
 def setup_driver():
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service)
-    driver.get("https://www.doctolib.fr/")
-    wait = WebDriverWait(driver, 10)
+    options = webdriver.ChromeOptions()
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    wait = WebDriverWait(driver, 15)
     return driver, wait
 
 def handle_cookies(wait):
     try:
-        reject_btn = wait.until(
-            EC.element_to_be_clickable((By.ID, "didomi-notice-disagree-button"))
-        )
-        reject_btn.click()
-        wait.until(EC.invisibility_of_element_located((By.ID, "didomi-notice-disagree-button")))
-    except:
-        pass
-
-def search_doctors(driver, wait, speciality, location, filters=None):
-    try:
-        # Enter location
-        place_input = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR,
-                "input.searchbar-input.searchbar-place-input"))
-        )
-        place_input.clear()
-        place_input.send_keys(location)
-        time.sleep(1)
+        cookie_selectors = [
+            "#didomi-notice-disagree-button",
+            "button[aria-label='Refuser']",
+            "button:contains('Refuser')",
+            ".didomi-continue-without-agreeing"
+        ]
         
-        # Enter speciality
-        speciality_input = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR,
-                "input.searchbar-input.searchbar-query-input"))
-        )
-        speciality_input.clear()
-        speciality_input.send_keys(speciality)
-        time.sleep(1)
-        
-        # Click search button
-        search_button = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR,
-                "button.Tappable-inactive.dl-button-primary.searchbar-submit-button.dl-button.dl-button-size-medium"))
-        )
-        search_button.click()
-        time.sleep(3)  # Wait for results to load
-        
-        # Handle filters if any
-        if filters:
+        for selector in cookie_selectors:
             try:
-                # Wait for and click filter button
-                filter_button = wait.until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR,
-                        "button.inline-flex.dl-align-items-center.h-fit.dl-rounded-borders-lg.dl-pill-white.dl-pill-medium.dl-pill-interactive.dl-pill-clickable.dl-width-fit-content"))
-                )
-                driver.execute_script("arguments[0].click();", filter_button)
-                time.sleep(2)
-                
-                # Handle video filter
-                if filters.get('video', False):
-                    try:
-                        video_filter = wait.until(
-                            EC.presence_of_element_located((By.XPATH,
-                                "//span[contains(text(), 'Consultation vidéo disponible')]"))
-                        )
-                        driver.execute_script("arguments[0].click();", video_filter)
-                        time.sleep(2)
+                reject_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+                reject_btn.click()
+                logger.info("Cookies refusés.")
+                return
+            except:
+                continue
+        
+        logger.info("Aucune bannière cookies trouvée ou déjà traitée.")
+    except:
+        logger.info("Aucune bannière cookies trouvée.")
 
-                        # Cliquer sur le bouton "Afficher les résultats"
-                        show_results_button = wait.until(
-                            EC.presence_of_element_located((By.XPATH,
-                                "//button[contains(text(), 'Afficher les résultats')]"))
-                        )
-                        driver.execute_script("arguments[0].click();", show_results_button)
-                        time.sleep(3)  # Attendre le chargement des résultats
-                    except Exception as e:
-                        logger.error(f"Error with video filter: {e}")
-                
-                # Handle sector filter
-                if 'sector' in filters:
-                    try:
-                        sector_mapping = {
-                            "1": "//span[contains(text(), 'Secteur 1')]",
-                            "2": "//span[contains(text(), 'Secteur 2')]",
-                            "0": "//span[contains(text(), 'Non conventionné')]"
-                        }
-                        if filters['sector'] in sector_mapping:
-                            sector_filter = wait.until(
-                                EC.presence_of_element_located((By.XPATH,
-                                    sector_mapping[filters['sector']]))
-                            )
-                            driver.execute_script("arguments[0].click();", sector_filter)
-                            time.sleep(2)
-                    except Exception as e:
-                        logger.error(f"Error with sector filter: {e}")
-                
-                # Click confirm button
-                try:
-                    confirm_button = wait.until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR,
-                            "button.Tappable-inactive.dl-button-primary.dl-button.dl-button-size-medium"))
-                    )
-                    driver.execute_script("arguments[0].click();", confirm_button)
-                    time.sleep(3)
-                except Exception as e:
-                    logger.error(f"Error confirming filters: {e}")
-                    
-            except Exception as e:
-                logger.error(f"Error in filter section: {e}")
-                
-    except Exception as e:
-        logger.error(f"Error in search: {e}")
-
-def extract_doctor_info(doctor_element):
+def search_doctors(driver, wait, speciality, location):
+    driver.get("https://www.doctolib.fr")
+    time.sleep(2)
+    handle_cookies(wait)
+    
     try:
-        name = doctor_element.find_element(By.CSS_SELECTOR, 
-            "h2.dl-text.dl-text-body.dl-text-bold.dl-text-s.dl-text-primary-110").text
-        address = doctor_element.find_element(By.CSS_SELECTOR, ".dl-text").text
-        sector = doctor_element.find_element(By.CSS_SELECTOR, 
-            "p.XZWvFVZmM9FHf461kjNO.G5dSlmEET4Zf5bQ5PR69.p8ZDI8v1UHoMdXI35XEt").text
-        availability = doctor_element.find_element(By.CSS_SELECTOR, 
-            ".dl-search-result-availability").text
+        place_selectors = [
+            "input.searchbar-place-input",
+            "input[placeholder*='Où']",
+            "input[data-test-id='location-input']"
+        ]
+        
+        place_input = None
+        for selector in place_selectors:
+            try:
+                place_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+                break
+            except:
+                continue
+                
+        if place_input:
+            place_input.clear()
+            place_input.send_keys(location)
+            time.sleep(1)
+        
+        speciality_selectors = [
+            "input.searchbar-query-input",
+            "input[placeholder*='spécialité']",
+            "input[data-test-id='speciality-input']"
+        ]
+        
+        speciality_input = None
+        for selector in speciality_selectors:
+            try:
+                speciality_input = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+                break
+            except:
+                continue
+                
+        if speciality_input:
+            speciality_input.clear()
+            speciality_input.send_keys(speciality)
+            time.sleep(1)
+        
+        submit_selectors = [
+            "button.searchbar-submit-button",
+            "button[type='submit']",
+            "button:contains('Rechercher')"
+        ]
+        
+        submit_btn = None
+        for selector in submit_selectors:
+            try:
+                submit_btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, selector)))
+                break
+            except:
+                continue
+                
+        if submit_btn:
+            submit_btn.click()
+            time.sleep(5)
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la recherche: {e}")
+
+def extract_doctor_info(card):
+    try:
+        name = ""
+        name_selectors = [
+            "h2.dl-text.dl-text-body.dl-text-bold.dl-text-s.dl-text-primary-110",
+            "h2[data-design-system-component='Text']",
+            ".dl-text-bold",
+            "h2"
+        ]
+        
+        for selector in name_selectors:
+            try:
+                name_element = card.find_element(By.CSS_SELECTOR, selector)
+                name = name_element.text.strip()
+                if name:
+                    break
+            except:
+                continue
+        
+        address = ""
+        sector = ""
+        availability = ""
+        
+        paragraph_selectors = [
+            "p.XZWvFVZmM9FHf461kjNO.G5dSlmEET4Zf5bQ5PR69",
+            "p[data-design-system-component='Paragraph']",
+            ".dl-text-regular",
+            "p"
+        ]
+        
+        paragraphs = []
+        for selector in paragraph_selectors:
+            try:
+                paragraphs = card.find_elements(By.CSS_SELECTOR, selector)
+                if paragraphs:
+                    break
+            except:
+                continue
+        
+        for p in paragraphs:
+            try:
+                text = p.text.strip()
+                if not text:
+                    continue
+                    
+                if "Secteur" in text or "€" in text or "Conventionné" in text:
+                    sector = text
+                elif "Disponibilité" in text or "disponible" in text or "prochaine" in text:
+                    availability = text
+                elif any(word in text.lower() for word in ["rue", "avenue", "boulevard", "place", "chemin", "allée"]):
+                    address = text
+                elif text.replace(" ", "").isdigit() and len(text) == 5: 
+                    if not address:
+                        address = text
+                    else:
+                        address += f" {text}"
+            except:
+                continue
+        
+        if not address:
+            try:
+                location_elements = card.find_elements(By.CSS_SELECTOR, "span[class*='location'], span[class*='address'], .dl-text-neutral-090")
+                for elem in location_elements:
+                    text = elem.text.strip()
+                    if text and not text.isdigit():
+                        address = text
+                        break
+            except:
+                pass
+        
+        specialty = ""
+        try:
+            specialty_elements = card.find_elements(By.CSS_SELECTOR, "p[style*='oxygen-color-component-text-bodyText-neutral-weak']")
+            for elem in specialty_elements:
+                text = elem.text.strip()
+                if text and "Médecin" in text:
+                    specialty = text
+                    break
+        except:
+            pass
         
         return {
             'name': name,
+            'specialty': specialty,
             'address': address,
             'sector': sector,
             'availability': availability
         }
+        
     except Exception as e:
-        logger.error(f"Error extracting doctor info: {e}")
+        logger.error(f"Erreur d'extraction: {e}")
         return None
 
-def save_to_csv(doctors, filename="doctors.csv"):
-    with open(filename, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['name', 'address', 'sector', 'availability'])
+def save_to_csv(doctors):
+    filename = "doctors.csv"
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=['name', 'specialty', 'address', 'sector', 'availability'])
         writer.writeheader()
-        for doctor in doctors:
-            if doctor:
-                writer.writerow(doctor)
+        valid_doctors = [doc for doc in doctors if doc and doc.get('name')]
+        for doc in valid_doctors:
+            writer.writerow(doc)
+    
+    logger.info(f"{len(valid_doctors)} médecins sauvegardés dans {filename}")
 
 def main():
-    speciality, location, filters = get_user_input()
-    driver, wait = setup_driver()
-    
     try:
-        handle_cookies(wait)
-        search_doctors(driver, wait, speciality, location, filters)
+        speciality, location = get_user_input()
+        driver, wait = setup_driver()
         
-        # Wait for results to load
-        time.sleep(3)
+        search_doctors(driver, wait, speciality, location)
         
-        # Get doctor cards
-        doctor_cards = wait.until(EC.presence_of_all_elements_located(
-            (By.CSS_SELECTOR, ".dl-search-result")
-        ))
-        
-        # Extract information
-        doctors = []
-        logger.info("\n=== Médecins trouvés ===")
-        
-        for card in doctor_cards:
-            doctor_info = extract_doctor_info(card)
-            if doctor_info:
-                doctors.append(doctor_info)
-                logger.info("-" * 50)
-                logger.info(f"Nom: {doctor_info['name']}")
-                logger.info(f"Secteur: {doctor_info['sector']}")
-                logger.info(f"Disponibilité: {doctor_info['availability']}")
-                logger.info(f"Adresse: {doctor_info['address']}")
-        
-        logger.info("=" * 50)
-        
-        # Save results
-        save_to_csv(doctors)
-        logger.info(f"\nSauvegardé {len(doctors)} résultats dans doctors.csv")
-        
-    except Exception as e:
-        logger.error(f"Une erreur est survenue: {str(e)}")
     
+        cards = []
+        result_selectors = [
+            ".dl-search-result",
+            ".search-result",
+            "[data-test-id='search-result']",
+            ".dl-card"
+        ]
+        
+        for selector in result_selectors:
+            try:
+                cards = wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, selector)))
+                if cards:
+                    break
+            except:
+                continue
+        
+        if not cards:
+            logger.warning("Aucun résultat trouvé. Vérifiez les termes de recherche.")
+            return
+            
+        logger.info(f"{len(cards)} résultats trouvés.")
+        
+        doctors = []
+        for i, card in enumerate(cards[:20]):  
+            try:
+                info = extract_doctor_info(card)
+                if info and info.get('name'):
+                    logger.info(f"Médecin {i+1}: {info}")
+                    doctors.append(info)
+                else:
+                    logger.warning(f"Impossible d'extraire les infos de la carte {i+1}")
+            except Exception as e:
+                logger.error(f"Erreur avec la carte {i+1}: {e}")
+                continue
+        
+        if doctors:
+            save_to_csv(doctors)
+        else:
+            logger.warning("Aucune donnée de médecin extraite.")
+            
+    except ModuleNotFoundError as e:
+        logger.error(f"Module manquant : {e}. Installez avec: pip install selenium webdriver-manager")
+    except Exception as e:
+        logger.error(f"Erreur générale : {e}")
     finally:
-        time.sleep(2)
-        driver.quit()
+        try:
+            driver.quit()
+        except:
+            logger.warning("Le navigateur n'a pas pu être fermé correctement.")
 
 if __name__ == "__main__":
     main()
